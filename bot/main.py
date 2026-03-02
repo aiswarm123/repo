@@ -3,14 +3,15 @@
 import asyncio
 import logging
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import load_config
 from bot.db.queries import init_db
-from bot.handlers import support, user
+from bot.handlers import admin, support, user
+from bot.middlewares.ban_check import BanCheckMiddleware
 from bot.middlewares.i18n import I18nMiddleware
 
 logging.basicConfig(
@@ -37,6 +38,20 @@ async def main() -> None:
 
     dp.update.middleware(I18nMiddleware())
 
+    # Restrict admin router to configured admin user IDs
+    admin_ids = set(config.admin_ids)
+    admin.router.message.filter(F.from_user.id.in_(admin_ids))
+    admin.router.callback_query.filter(F.from_user.id.in_(admin_ids))
+
+    # BanCheckMiddleware runs before all user and support handlers.
+    # It is NOT applied to the admin router so admins are never blocked.
+    ban_middleware = BanCheckMiddleware()
+    user.router.message.middleware(ban_middleware)
+    user.router.callback_query.middleware(ban_middleware)
+    support.router.message.middleware(ban_middleware)
+
+    # Admin router is included first so its filters take priority
+    dp.include_router(admin.router)
     dp.include_router(user.router)
     dp.include_router(support.router)
 
