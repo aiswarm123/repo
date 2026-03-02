@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL,
     username      TEXT,
+    subject       TEXT,
+    body          TEXT,
     status        TEXT NOT NULL DEFAULT 'open',
     forward_msg   INTEGER,
     thread_msg_id INTEGER,
@@ -47,12 +49,14 @@ async def create_ticket(
     db_path: str,
     user_id: int,
     username: str | None,
+    subject: str | None = None,
+    body: str | None = None,
 ) -> int:
     """Insert a new ticket and return its id."""
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute(
-            "INSERT INTO tickets (user_id, username) VALUES (?, ?)",
-            (user_id, username),
+            "INSERT INTO tickets (user_id, username, subject, body) VALUES (?, ?, ?, ?)",
+            (user_id, username, subject, body),
         )
         await db.commit()
         return cursor.lastrowid  # type: ignore[return-value]
@@ -104,6 +108,18 @@ async def get_ticket_by_forward_msg(db_path: str, forward_msg: int) -> dict | No
             return dict(row) if row else None
 
 
+async def get_user_tickets(db_path: str, user_id: int) -> list[dict]:
+    """Return all tickets for a specific user ordered by creation time desc."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_open_tickets(db_path: str) -> list[dict]:
     """Return all tickets with status='open'."""
     async with aiosqlite.connect(db_path) as db:
@@ -141,6 +157,11 @@ async def append_message(
             (ticket_id, direction, sender_id, text),
         )
         await db.commit()
+
+
+async def add_reply(db_path: str, ticket_id: int, agent_id: int, body: str) -> None:
+    """Record an agent reply to a ticket."""
+    await append_message(db_path, ticket_id, "support", agent_id, body)
 
 
 async def get_messages(db_path: str, ticket_id: int) -> list[dict]:

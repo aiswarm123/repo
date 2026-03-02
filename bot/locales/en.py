@@ -1,25 +1,28 @@
 """English strings."""
 
 STRINGS: dict[str, str] = {
-    "start": (
-        "Hi {name}! I'm the support bot.\n\n"
-        "Just send me a message and I'll connect you with our support team.\n"
-        "Use /mystatus to check your current conversation.\n"
-        "Use /cancel to close your conversation."
-    ),
-    "help": (
-        "How to reach support:\n"
-        "• Send any message — it goes straight to the support team\n"
-        "• /mystatus — view your current conversation\n"
-        "• /cancel — close your conversation\n"
-        "• /language — change language"
-    ),
-    "cancel_nothing": "You have no open conversation to cancel.",
-    "cancelled": "Your conversation has been closed.",
+    "start": "Hi {name}! Welcome to support.",
+    "start_choose_action": "What would you like to do?",
+    "help": "Available commands:\n/ticket — open a support ticket\n/mystatus — check your tickets\n/language — change language",
+    "help_choose": "How can I help?",
+    "help_tickets_info": "To open a ticket, press <b>🎫 Open Ticket</b>.\nTo view your tickets, press <b>📋 My Tickets</b>.",
+    "help_account_info": "For account issues, please open a support ticket and our team will assist you.",
+    "help_billing_info": "For billing questions, please open a support ticket and our team will assist you.",
+    "cancel_nothing": "Nothing to cancel.",
+    "cancelled": "Cancelled.",
     "relay_new": "✅ Your message has been sent to support. We'll reply here shortly.",
     "relay_sent": "✅ Message sent to support.",
-    "mystatus_none": "You have no open conversation.",
-    "mystatus_header": "Your current conversation:",
+    "ticket_ask_subject": "Let's open a ticket. Give it a short subject line.",
+    "ticket_ask_body": "Got it. Now describe the issue in detail.",
+    "ticket_subject_invalid": "Please send a text subject.",
+    "ticket_body_invalid": "Please send a text description.",
+    "ticket_confirm": "Ready to submit?\n\n<b>Subject:</b> {subject}\n<b>Details:</b> {body}",
+    "ticket_submitted": "✅ Ticket #{id} submitted! You'll be notified when our team responds.",
+    "ticket_detail": "🎫 <b>Ticket #{id}</b>\nSubject: {subject}\nStatus: {status}\nOpened: {created_at}",
+    "ticket_closed": "Ticket #{id} has been closed.",
+    "ticket_not_found": "Ticket not found.",
+    "mystatus_none": "You have no tickets yet.",
+    "mystatus_header": "Your tickets:",
     "language_choose": "Choose your language:",
-    "language_set": "Language updated!",
+    "language_set": "Language updated! ✅",
 }

@@ -7,3 +7,7 @@ class AdminReply(StatesGroup):
 
 class AdminBroadcast(StatesGroup):
     waiting_text = State()
+
+
+class SupportReply(StatesGroup):
+    waiting_text = State()

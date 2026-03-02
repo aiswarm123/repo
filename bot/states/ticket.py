@@ -1,1 +1,7 @@
-# Ticket FSM states removed — replaced by live chat relay model (issue #17).
+from aiogram.fsm.state import State, StatesGroup
+
+
+class TicketForm(StatesGroup):
+    waiting_for_subject = State()
+    waiting_for_body = State()
+    confirming = State()
