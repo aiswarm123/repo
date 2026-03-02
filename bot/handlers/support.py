@@ -1,8 +1,8 @@
-"""Handlers for the support team: /reply and /resolve commands."""
+"""Handlers for the support team: thread-based relay and /resolve."""
 
 import logging
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -12,44 +12,34 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-@router.message(Command("reply"))
-async def cmd_reply(message: Message, db_path: str) -> None:
-    """Usage: /reply <ticket_id> <message text>"""
-    parts = (message.text or "").split(maxsplit=2)
-    if len(parts) < 3 or not parts[1].isdigit():
-        await message.answer("Usage: /reply <ticket_id> <message>")
+@router.message(F.reply_to_message, F.text)
+async def relay_support_reply(message: Message, db_path: str, support_chat_id: int) -> None:
+    """Relay a support-agent reply in the support chat back to the user."""
+    if message.chat.id != support_chat_id:
+        return
+    if not message.reply_to_message or not message.text:
         return
 
-    ticket_id = int(parts[1])
-    reply_body = parts[2]
-
-    ticket = await queries.get_ticket(db_path, ticket_id)
+    replied_msg_id = message.reply_to_message.message_id
+    ticket = await queries.get_ticket_by_forward_msg(db_path, replied_msg_id)
     if not ticket:
-        await message.answer(f"Ticket #{ticket_id} not found.")
-        return
+        return  # not a tracked thread
 
-    if ticket["status"] == "resolved":
-        await message.answer(f"Ticket #{ticket_id} is already resolved.")
-        return
+    agent_id = message.from_user.id if message.from_user else None
+    await queries.append_message(db_path, ticket["id"], "support", agent_id, message.text)
 
-    agent_id = message.from_user.id  # type: ignore[union-attr]
-    await queries.add_reply(db_path, ticket_id, agent_id, reply_body)
-
-    await message.answer(f"Reply sent for ticket #{ticket_id}.")
-    logger.info("Agent %d replied to ticket #%d", agent_id, ticket_id)
-
-    # Notify the user who opened the ticket
     try:
         await message.bot.send_message(  # type: ignore[union-attr]
             ticket["user_id"],
-            f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n{reply_body}",
+            f"👨‍💼 <b>Support:</b> {message.text}",
             parse_mode="HTML",
         )
+        logger.info("Relayed support reply for ticket #%d to user %d", ticket["id"], ticket["user_id"])
     except Exception:
         logger.warning(
-            "Could not notify user %d about reply to ticket #%d",
+            "Could not relay support reply for ticket #%d to user %d",
+            ticket["id"],
             ticket["user_id"],
-            ticket_id,
         )
 
 
@@ -71,7 +61,7 @@ async def cmd_resolve(message: Message, db_path: str) -> None:
         return
 
     ticket = await queries.get_ticket(db_path, ticket_id)
-    await message.answer(f"Ticket #{ticket_id} marked as resolved.")
+    await message.answer(f"Conversation #{ticket_id} marked as resolved.")
     logger.info(
         "Agent %d resolved ticket #%d",
         message.from_user.id,  # type: ignore[union-attr]
@@ -83,8 +73,8 @@ async def cmd_resolve(message: Message, db_path: str) -> None:
         try:
             await message.bot.send_message(  # type: ignore[union-attr]
                 ticket["user_id"],
-                f"✅ Your ticket #{ticket_id} has been resolved. "
-                "Thank you for contacting support!",
+                f"✅ Your conversation has been resolved. "
+                "Thank you for contacting support! Write any message to start a new one.",
             )
         except Exception:
             logger.warning(
@@ -96,19 +86,19 @@ async def cmd_resolve(message: Message, db_path: str) -> None:
 
 @router.message(Command("open_tickets"))
 async def cmd_open_tickets(message: Message, db_path: str) -> None:
-    """List all open tickets (support team only)."""
+    """List all open conversations (support team only)."""
     tickets = await queries.get_open_tickets(db_path)
 
     if not tickets:
-        await message.answer("No open tickets.")
+        await message.answer("No open conversations.")
         return
 
-    lines = [f"<b>Open tickets ({len(tickets)}):</b>"]
+    lines = [f"<b>Open conversations ({len(tickets)}):</b>"]
     for t in tickets:
         username = f"@{t['username']}" if t["username"] else str(t["user_id"])
         lines.append(
-            f"• <b>#{t['id']}</b> — {t['subject']} [{username}] "
-            f"(<i>/reply {t['id']} ...</i>)"
+            f"• <b>#{t['id']}</b> — {username} "
+            f"(started {t['created_at'][:10]}) — /resolve {t['id']}"
         )
 
     await message.answer("\n".join(lines), parse_mode="HTML")

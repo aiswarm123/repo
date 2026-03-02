@@ -5,22 +5,23 @@ import aiosqlite
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS tickets (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    username    TEXT,
-    subject     TEXT NOT NULL,
-    body        TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'open',
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    resolved_at DATETIME
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    username      TEXT,
+    status        TEXT NOT NULL DEFAULT 'open',
+    forward_msg   INTEGER,
+    thread_msg_id INTEGER,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at   DATETIME
 );
 
-CREATE TABLE IF NOT EXISTS ticket_replies (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticket_id  INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    agent_id   INTEGER NOT NULL,
-    body       TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id   INTEGER NOT NULL REFERENCES tickets(id),
+    direction   TEXT NOT NULL,
+    sender_id   INTEGER,
+    text        TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -46,17 +47,25 @@ async def create_ticket(
     db_path: str,
     user_id: int,
     username: str | None,
-    subject: str,
-    body: str,
 ) -> int:
     """Insert a new ticket and return its id."""
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute(
-            "INSERT INTO tickets (user_id, username, subject, body) VALUES (?, ?, ?, ?)",
-            (user_id, username, subject, body),
+            "INSERT INTO tickets (user_id, username) VALUES (?, ?)",
+            (user_id, username),
         )
         await db.commit()
         return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def set_thread_msg_id(db_path: str, ticket_id: int, thread_msg_id: int) -> None:
+    """Store the support-chat message ID that anchors the ticket thread."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE tickets SET forward_msg = ?, thread_msg_id = ? WHERE id = ?",
+            (thread_msg_id, thread_msg_id, ticket_id),
+        )
+        await db.commit()
 
 
 async def get_ticket(db_path: str, ticket_id: int) -> dict | None:
@@ -65,6 +74,31 @@ async def get_ticket(db_path: str, ticket_id: int) -> dict | None:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM tickets WHERE id = ?", (ticket_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_open_ticket_by_user(db_path: str, user_id: int) -> dict | None:
+    """Return the user's currently open ticket, or None."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM tickets WHERE user_id = ? AND status = 'open' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_ticket_by_forward_msg(db_path: str, forward_msg: int) -> dict | None:
+    """Find an open ticket by the support-chat anchor message ID."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM tickets WHERE forward_msg = ?",
+            (forward_msg,),
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
@@ -93,28 +127,28 @@ async def resolve_ticket(db_path: str, ticket_id: int) -> bool:
         return cursor.rowcount > 0
 
 
-async def add_reply(
+async def append_message(
     db_path: str,
     ticket_id: int,
-    agent_id: int,
-    body: str,
-) -> int:
-    """Insert a reply for a ticket and return its id."""
+    direction: str,
+    sender_id: int | None,
+    text: str,
+) -> None:
+    """Append a message to the conversation history."""
     async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute(
-            "INSERT INTO ticket_replies (ticket_id, agent_id, body) VALUES (?, ?, ?)",
-            (ticket_id, agent_id, body),
+        await db.execute(
+            "INSERT INTO messages (ticket_id, direction, sender_id, text) VALUES (?, ?, ?, ?)",
+            (ticket_id, direction, sender_id, text),
         )
         await db.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
 
 
-async def get_replies(db_path: str, ticket_id: int) -> list[dict]:
-    """Return all replies for a ticket ordered by creation time."""
+async def get_messages(db_path: str, ticket_id: int) -> list[dict]:
+    """Return all messages for a ticket ordered by creation time."""
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC",
+            "SELECT * FROM messages WHERE ticket_id = ? ORDER BY created_at ASC",
             (ticket_id,),
         ) as cursor:
             rows = await cursor.fetchall()
