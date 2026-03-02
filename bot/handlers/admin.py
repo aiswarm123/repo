@@ -63,7 +63,7 @@ async def _send_tickets_page(
         for t in tickets:
             username = f"@{t['username']}" if t["username"] else str(t["user_id"])
             lines.append(
-                f"<b>#{t['id']}</b> | {username} | {t['subject']} | {t['created_at'][:10]}"
+                f"<b>#{t['id']}</b> | {username} | {t['created_at'][:10]}"
             )
         text = "\n".join(lines)
 
@@ -109,15 +109,20 @@ async def cb_view_ticket(callback: CallbackQuery, db_path: str) -> None:
 
     username = f"@{ticket['username']}" if ticket["username"] else str(ticket["user_id"])
     text = (
-        f"<b>Ticket #{ticket['id']}</b>\n"
+        f"<b>Conversation #{ticket['id']}</b>\n"
         f"User: {username} (ID: {ticket['user_id']})\n"
-        f"Subject: {ticket['subject']}\n"
         f"Status: {ticket['status']}\n"
         f"Created: {ticket['created_at']}\n"
     )
     if ticket["resolved_at"]:
         text += f"Resolved: {ticket['resolved_at']}\n"
-    text += f"\n{ticket['body']}"
+
+    msgs = await queries.get_messages(db_path, ticket_id)
+    if msgs:
+        text += "\n<b>Messages:</b>\n"
+        for m in msgs[-5:]:
+            prefix = "User" if m["direction"] == "user" else "Support"
+            text += f"• <b>{prefix}:</b> {m['text']}\n"
 
     await callback.message.edit_text(  # type: ignore[union-attr]
         text,
@@ -161,12 +166,12 @@ async def process_admin_reply(
         return
 
     agent_id = message.from_user.id  # type: ignore[union-attr]
-    await queries.add_reply(db_path, ticket_id, agent_id, message.text)
+    await queries.append_message(db_path, ticket_id, "support", agent_id, message.text)
 
     try:
         await message.bot.send_message(  # type: ignore[union-attr]
             ticket["user_id"],
-            f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n{message.text}",
+            f"👨‍💼 <b>Support:</b> {message.text}",
             parse_mode="HTML",
         )
         await message.answer(f"Reply sent to user for ticket #{ticket_id}.")
@@ -200,8 +205,8 @@ async def cb_resolve_ticket(callback: CallbackQuery, db_path: str) -> None:
         if ticket:
             await callback.bot.send_message(  # type: ignore[union-attr]
                 ticket["user_id"],
-                f"✅ Your ticket #{ticket_id} has been resolved. "
-                "Thank you for contacting support!",
+                f"✅ Your conversation has been resolved. "
+                "Thank you for contacting support! Write any message to start a new one.",
             )
     except Exception:
         logger.warning("Could not notify user about resolution of ticket #%d", ticket_id)

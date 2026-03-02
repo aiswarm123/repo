@@ -29,7 +29,7 @@ async def db(tmp_path):
 async def test_get_all_tickets_paginated(db):
     """get_all_tickets returns correct pages."""
     for i in range(7):
-        await create_ticket(db, user_id=i, username=f"user{i}", subject=f"S{i}", body="body")
+        await create_ticket(db, user_id=i, username=f"user{i}")
 
     page1 = await get_all_tickets(db, "open", limit=5, offset=0)
     assert len(page1) == 5
@@ -41,8 +41,8 @@ async def test_get_all_tickets_paginated(db):
 @pytest.mark.asyncio
 async def test_get_all_tickets_status_filter(db):
     """get_all_tickets filters by status correctly."""
-    id1 = await create_ticket(db, user_id=1, username="a", subject="S1", body="B1")
-    await create_ticket(db, user_id=2, username="b", subject="S2", body="B2")
+    id1 = await create_ticket(db, user_id=1, username="a")
+    await create_ticket(db, user_id=2, username="b")
     await resolve_ticket(db, id1)
 
     open_tickets = await get_all_tickets(db, "open", limit=10, offset=0)
@@ -50,15 +50,15 @@ async def test_get_all_tickets_status_filter(db):
 
     assert len(open_tickets) == 1
     assert len(resolved_tickets) == 1
-    assert open_tickets[0]["subject"] == "S2"
-    assert resolved_tickets[0]["subject"] == "S1"
+    assert open_tickets[0]["username"] == "b"
+    assert resolved_tickets[0]["username"] == "a"
 
 
 @pytest.mark.asyncio
 async def test_get_ticket_count_by_status(db):
     """get_ticket_count_by_status returns correct counts."""
-    id1 = await create_ticket(db, user_id=1, username="a", subject="S1", body="B1")
-    await create_ticket(db, user_id=2, username="b", subject="S2", body="B2")
+    id1 = await create_ticket(db, user_id=1, username="a")
+    await create_ticket(db, user_id=2, username="b")
     await resolve_ticket(db, id1)
 
     counts = await get_ticket_count_by_status(db)
@@ -79,9 +79,9 @@ async def test_get_ticket_count_empty_db(db):
 @pytest.mark.asyncio
 async def test_get_unique_user_ids(db):
     """get_unique_user_ids returns distinct user IDs only."""
-    await create_ticket(db, user_id=10, username="x", subject="S1", body="B1")
-    await create_ticket(db, user_id=10, username="x", subject="S2", body="B2")
-    await create_ticket(db, user_id=20, username="y", subject="S3", body="B3")
+    await create_ticket(db, user_id=10, username="x")
+    await create_ticket(db, user_id=10, username="x")
+    await create_ticket(db, user_id=20, username="y")
 
     user_ids = await get_unique_user_ids(db)
     assert set(user_ids) == {10, 20}
@@ -91,7 +91,7 @@ async def test_get_unique_user_ids(db):
 @pytest.mark.asyncio
 async def test_get_last_24h_count(db):
     """Newly created tickets are counted in the last 24h window."""
-    await create_ticket(db, user_id=1, username="u", subject="S", body="B")
+    await create_ticket(db, user_id=1, username="u")
     count = await get_last_24h_count(db)
     assert count >= 1
 

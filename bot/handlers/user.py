@@ -1,16 +1,14 @@
-"""Handlers for regular users: /start, /help, /ticket FSM flow, /language."""
+"""Handlers for regular users: /start, /help, /mystatus, /cancel, /language, and relay."""
 
 import logging
 from typing import Callable
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import queries
-from bot.keyboards.user import cancel_keyboard, language_keyboard, ticket_submitted_keyboard
-from bot.states.ticket import TicketForm
+from bot.keyboards.user import language_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -57,121 +55,109 @@ async def language_callback(
     await callback.answer()
 
 
-@router.message(Command("ticket"))
-async def cmd_ticket(message: Message, state: FSMContext, t: Callable[[str], str]) -> None:
-    await state.set_state(TicketForm.waiting_for_subject)
-    await message.answer(t("ticket_ask_subject"), reply_markup=cancel_keyboard())
-
-
-@router.callback_query(F.data == "cancel")
-async def cancel_callback(callback: CallbackQuery, state: FSMContext, t: Callable[[str], str]) -> None:
-    await state.clear()
-    await callback.message.edit_text(t("cancelled"))  # type: ignore[union-attr]
-    await callback.answer()
-
-
-@router.message(TicketForm.waiting_for_subject)
-async def process_subject(message: Message, state: FSMContext, t: Callable[[str], str]) -> None:
-    if not message.text:
-        await message.answer(t("ticket_subject_invalid"))
-        return
-    await state.update_data(subject=message.text)
-    await state.set_state(TicketForm.waiting_for_body)
-    await message.answer(t("ticket_ask_body"), reply_markup=cancel_keyboard())
-
-
-@router.message(TicketForm.waiting_for_body)
-async def process_body(
+@router.message(Command("cancel"))
+async def cmd_cancel(
     message: Message,
-    state: FSMContext,
     t: Callable[[str], str],
     db_path: str,
     support_chat_id: int,
 ) -> None:
-    if not message.text:
-        await message.answer(t("ticket_body_invalid"))
-        return
-
-    data = await state.get_data()
-    subject: str = data["subject"]
-    body: str = message.text
+    """Close the user's current open conversation."""
     user = message.from_user
-
-    ticket_id = await queries.create_ticket(
-        db_path=db_path,
-        user_id=user.id,  # type: ignore[union-attr]
-        username=user.username if user else None,  # type: ignore[union-attr]
-        subject=subject,
-        body=body,
-    )
-
-    await state.clear()
-
-    await message.answer(
-        t("ticket_submitted").format(id=ticket_id),
-        reply_markup=ticket_submitted_keyboard(ticket_id),
-    )
-
-    # Notify support chat
-    username_display = f"@{user.username}" if user and user.username else str(user.id if user else "unknown")  # type: ignore[union-attr]
-    await message.bot.send_message(  # type: ignore[union-attr]
-        support_chat_id,
-        f"📩 <b>New ticket #{ticket_id}</b>\n"
-        f"From: {username_display}\n"
-        f"Subject: {subject}\n\n"
-        f"{body}\n\n"
-        f"Reply with: <code>/reply {ticket_id} &lt;message&gt;</code>\n"
-        f"Resolve with: <code>/resolve {ticket_id}</code>",
-        parse_mode="HTML",
-    )
-    logger.info("Ticket #%d created by user %d", ticket_id, user.id if user else 0)  # type: ignore[union-attr]
+    if not user:
+        return
+    ticket = await queries.get_open_ticket_by_user(db_path, user.id)
+    if not ticket:
+        await message.answer(t("cancel_nothing"))
+        return
+    await queries.resolve_ticket(db_path, ticket["id"])
+    await message.answer(t("cancelled"))
+    logger.info("User %d cancelled conversation (ticket #%d)", user.id, ticket["id"])
+    try:
+        await message.bot.send_message(  # type: ignore[union-attr]
+            support_chat_id,
+            f"ℹ️ User closed the conversation (ticket #{ticket['id']}).",
+        )
+    except Exception:
+        pass
 
 
 @router.message(Command("mystatus"))
 async def cmd_mystatus(message: Message, t: Callable[[str], str], db_path: str) -> None:
-    args = message.text.split() if message.text else []  # type: ignore[union-attr]
-    if len(args) < 2 or not args[1].isdigit():
-        await message.answer("Usage: /mystatus <ticket_id>")
+    user = message.from_user
+    if not user:
         return
-
-    ticket_id = int(args[1])
-    ticket = await queries.get_ticket(db_path, ticket_id)
-
+    ticket = await queries.get_open_ticket_by_user(db_path, user.id)
     if not ticket:
-        await message.answer(f"Ticket #{ticket_id} not found.")
+        await message.answer(t("mystatus_none"))
         return
 
-    # Only allow the ticket owner to check
-    if ticket["user_id"] != message.from_user.id:  # type: ignore[union-attr]
-        await message.answer("You don't have permission to view that ticket.")
-        return
-
-    replies = await queries.get_replies(db_path, ticket_id)
-    reply_text = ""
-    if replies:
-        reply_text = "\n\n<b>Replies:</b>\n" + "\n".join(
-            f"• {r['body']}" for r in replies
-        )
+    msgs = await queries.get_messages(db_path, ticket["id"])
+    history = ""
+    if msgs:
+        lines = []
+        for m in msgs[-10:]:  # last 10 messages
+            prefix = "You" if m["direction"] == "user" else "Support"
+            lines.append(f"<b>{prefix}:</b> {m['text']}")
+        history = "\n\n<b>Recent messages:</b>\n" + "\n".join(lines)
 
     await message.answer(
-        f"<b>Ticket #{ticket_id}</b>\n"
-        f"Subject: {ticket['subject']}\n"
+        f"<b>Conversation #{ticket['id']}</b>\n"
         f"Status: {ticket['status']}\n"
-        f"Created: {ticket['created_at']}"
-        f"{reply_text}",
+        f"Started: {ticket['created_at']}"
+        f"{history}",
         parse_mode="HTML",
     )
 
 
-@router.callback_query(F.data.startswith("status:"))
-async def status_callback(callback: CallbackQuery, db_path: str) -> None:
-    ticket_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
-    ticket = await queries.get_ticket(db_path, ticket_id)
+# ── Catch-all relay ───────────────────────────────────────────────────────────
 
-    if not ticket:
-        await callback.answer(f"Ticket #{ticket_id} not found.", show_alert=True)
+
+@router.message(F.text, ~F.text.startswith("/"))
+async def relay_user_message(
+    message: Message,
+    bot: Bot,
+    db_path: str,
+    support_chat_id: int,
+    t: Callable[[str], str],
+) -> None:
+    """Forward any non-command text to the support chat thread."""
+    user = message.from_user
+    if not user or not message.text:
         return
 
-    await callback.answer(
-        f"Ticket #{ticket_id} status: {ticket['status']}", show_alert=True
-    )
+    ticket = await queries.get_open_ticket_by_user(db_path, user.id)
+
+    if ticket:
+        # Existing open conversation — append to thread
+        await queries.append_message(db_path, ticket["id"], "user", user.id, message.text)
+        try:
+            await bot.send_message(
+                support_chat_id,
+                f"<b>{user.first_name}:</b> {message.text}",
+                reply_to_message_id=ticket["thread_msg_id"],
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.warning("Could not relay message to support chat for ticket #%d", ticket["id"])
+        await message.answer(t("relay_sent"))
+    else:
+        # New conversation — create ticket, forward opening message
+        ticket_id = await queries.create_ticket(db_path, user.id, user.username)
+        await queries.append_message(db_path, ticket_id, "user", user.id, message.text)
+
+        username_display = f"@{user.username}" if user.username else f"ID:{user.id}"
+        try:
+            fwd = await bot.send_message(
+                support_chat_id,
+                f"💬 <b>New conversation</b> — {user.full_name} ({username_display}, "
+                f"<code>{user.id}</code>)\n\n{message.text}\n\n"
+                f"<i>Reply to this thread to respond. Use /resolve {ticket_id} to close.</i>",
+                parse_mode="HTML",
+            )
+            await queries.set_thread_msg_id(db_path, ticket_id, fwd.message_id)
+        except Exception:
+            logger.warning("Could not forward new ticket #%d to support chat", ticket_id)
+
+        await message.answer(t("relay_new"))
+        logger.info("Ticket #%d created by user %d", ticket_id, user.id)
