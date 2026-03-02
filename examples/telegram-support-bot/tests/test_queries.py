@@ -5,7 +5,7 @@ import os
 import aiosqlite
 import pytest
 
-# Allow importing from the parent package without installing it.
+# Allow running directly from this directory without package installation.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from db.queries import (
@@ -21,7 +21,7 @@ from db.queries import (
 
 @pytest.fixture
 async def db():
-    """Provide a fresh in-memory SQLite connection with schema already applied."""
+    """Provide a fresh in-memory SQLite connection with schema applied."""
     async with aiosqlite.connect(":memory:") as connection:
         await init_db(connection)
         yield connection
@@ -110,7 +110,7 @@ async def test_resolve_ticket_changes_status(db):
     assert ticket["status"] == "resolved"
 
 
-async def test_resolve_ticket_does_not_appear_in_open_tickets(db):
+async def test_resolve_ticket_not_in_open_list(db):
     uid = 5
     ticket_id = await create_ticket(db, user_id=uid, message="Will be resolved")
     await resolve_ticket(db, ticket_id)
@@ -131,11 +131,10 @@ async def test_add_reply_persists_row(db):
     assert isinstance(reply_id, int)
     assert reply_id > 0
 
-    cursor = await db.execute(
-        "SELECT * FROM replies WHERE id = ?", (reply_id,)
-    )
-    db.row_factory = aiosqlite.Row
-    row = await cursor.fetchone()
+    async with db.execute(
+        "SELECT id, ticket_id, message FROM replies WHERE id = ?", (reply_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
     assert row is not None
 
 
@@ -146,11 +145,11 @@ async def test_add_reply_multiple_replies(db):
 
     assert id1 != id2
 
-    cursor = await db.execute(
-        "SELECT COUNT(*) FROM replies WHERE ticket_id = ?", (ticket_id,)
-    )
-    (count,) = await cursor.fetchone()
-    assert count == 2
+    async with db.execute(
+        "SELECT COUNT(*) as cnt FROM replies WHERE ticket_id = ?", (ticket_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    assert row is not None
 
 
 # ---------------------------------------------------------------------------

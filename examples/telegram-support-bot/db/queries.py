@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS replies (
 
 
 async def init_db(db: aiosqlite.Connection) -> None:
-    """Create tables if they don't exist."""
+    """Create tables and configure row factory on the connection."""
+    db.row_factory = aiosqlite.Row
     await db.executescript(CREATE_TABLES_SQL)
     await db.commit()
 
@@ -40,25 +41,21 @@ async def create_ticket(db: aiosqlite.Connection, user_id: int, message: str) ->
 
 async def get_ticket(db: aiosqlite.Connection, ticket_id: int) -> dict | None:
     """Return the ticket row as a dict, or None if not found."""
-    db.row_factory = aiosqlite.Row
-    cursor = await db.execute(
+    async with db.execute(
         "SELECT * FROM tickets WHERE id = ?",
         (ticket_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return None
-    return dict(row)
+    ) as cursor:
+        row = await cursor.fetchone()
+    return dict(row) if row is not None else None
 
 
 async def get_open_tickets(db: aiosqlite.Connection, user_id: int) -> list[dict]:
     """Return all open tickets belonging to *user_id*."""
-    db.row_factory = aiosqlite.Row
-    cursor = await db.execute(
+    async with db.execute(
         "SELECT * FROM tickets WHERE user_id = ? AND status = 'open'",
         (user_id,),
-    )
-    rows = await cursor.fetchall()
+    ) as cursor:
+        rows = await cursor.fetchall()
     return [dict(row) for row in rows]
 
 
