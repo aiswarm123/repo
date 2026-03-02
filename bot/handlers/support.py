@@ -8,6 +8,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import queries
+from bot.handlers.templates import support_reply_msg, ticket_resolved_msg
+from bot.handlers.utils import fetch_open_ticket, parse_ticket_id
 from bot.states.admin import SupportReply
 
 logger = logging.getLogger(__name__)
@@ -36,8 +38,7 @@ async def relay_support_reply(message: Message, db_path: str, support_chat_id: i
     try:
         await message.bot.send_message(  # type: ignore[union-attr]
             ticket["user_id"],
-            f"👨‍💼 <b>Support:</b> {message.text}",
-            parse_mode="HTML",
+            support_reply_msg(ticket["id"], ticket.get("subject"), message.text),
         )
         logger.info("Relayed support reply for ticket #%d to user %d", ticket["id"], ticket["user_id"])
     except Exception:
@@ -54,17 +55,15 @@ async def relay_support_reply(message: Message, db_path: str, support_chat_id: i
 @router.message(Command("reply"))
 async def cmd_reply(message: Message, db_path: str) -> None:
     """Usage: /reply <ticket_id> <message text>"""
-    parts = (message.text or "").split(maxsplit=2)
-    if len(parts) < 3 or not parts[1].isdigit():
-        await message.answer("Usage: /reply <ticket_id> <message>")
+    ticket_id = await parse_ticket_id(message, 3, "/reply <ticket_id> <message>")
+    if ticket_id is None:
         return
 
-    ticket_id = int(parts[1])
+    parts = (message.text or "").split(maxsplit=2)
     reply_body = parts[2]
 
-    ticket = await queries.get_ticket(db_path, ticket_id)
-    if not ticket:
-        await message.answer(f"Ticket #{ticket_id} not found.")
+    ticket = await fetch_open_ticket(db_path, ticket_id, message)
+    if ticket is None:
         return
 
     agent_id = message.from_user.id  # type: ignore[union-attr]
@@ -76,8 +75,7 @@ async def cmd_reply(message: Message, db_path: str) -> None:
     try:
         await message.bot.send_message(  # type: ignore[union-attr]
             ticket["user_id"],
-            f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n{reply_body}",
-            parse_mode="HTML",
+            support_reply_msg(ticket_id, ticket["subject"], reply_body),
         )
     except Exception:
         logger.warning(
@@ -90,21 +88,15 @@ async def cmd_reply(message: Message, db_path: str) -> None:
 @router.message(Command("resolve"))
 async def cmd_resolve(message: Message, db_path: str) -> None:
     """Usage: /resolve <ticket_id>"""
-    parts = (message.text or "").split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Usage: /resolve <ticket_id>")
+    ticket_id = await parse_ticket_id(message, 2, "/resolve <ticket_id>")
+    if ticket_id is None:
         return
 
-    ticket_id = int(parts[1])
-    updated = await queries.resolve_ticket(db_path, ticket_id)
-
-    if not updated:
-        await message.answer(
-            f"Ticket #{ticket_id} not found or already resolved."
-        )
+    ticket = await fetch_open_ticket(db_path, ticket_id, message)
+    if ticket is None:
         return
 
-    ticket = await queries.get_ticket(db_path, ticket_id)
+    await queries.resolve_ticket(db_path, ticket_id)
     await message.answer(f"Conversation #{ticket_id} marked as resolved.")
     logger.info(
         "Agent %d resolved ticket #%d",
@@ -112,19 +104,17 @@ async def cmd_resolve(message: Message, db_path: str) -> None:
         ticket_id,
     )
 
-    if ticket:
-        try:
-            await message.bot.send_message(  # type: ignore[union-attr]
-                ticket["user_id"],
-                f"✅ Your conversation has been resolved. "
-                "Thank you for contacting support! Write any message to start a new one.",
-            )
-        except Exception:
-            logger.warning(
-                "Could not notify user %d about resolution of ticket #%d",
-                ticket["user_id"],
-                ticket_id,
-            )
+    try:
+        await message.bot.send_message(  # type: ignore[union-attr]
+            ticket["user_id"],
+            ticket_resolved_msg(ticket_id, ticket["subject"], ""),
+        )
+    except Exception:
+        logger.warning(
+            "Could not notify user %d about resolution of ticket #%d",
+            ticket["user_id"],
+            ticket_id,
+        )
 
 
 @router.message(Command("open_tickets"))
@@ -144,7 +134,7 @@ async def cmd_open_tickets(message: Message, db_path: str) -> None:
             f"(started {t['created_at'][:10]}) — /resolve {t['id']}"
         )
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines))
 
 
 # ── Inline button callbacks ───────────────────────────────────────────────────
@@ -184,8 +174,7 @@ async def process_support_reply(
     try:
         await message.bot.send_message(  # type: ignore[union-attr]
             ticket["user_id"],
-            f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n{message.text}",
-            parse_mode="HTML",
+            support_reply_msg(ticket_id, ticket["subject"], message.text),
         )
         await message.answer(f"Reply sent for ticket #{ticket_id}.")
     except Exception:
@@ -215,8 +204,7 @@ async def cb_support_resolve(callback: CallbackQuery, db_path: str) -> None:
         try:
             await callback.bot.send_message(  # type: ignore[union-attr]
                 ticket["user_id"],
-                f"✅ Your ticket #{ticket_id} has been resolved. "
-                "Thank you for contacting support!",
+                ticket_resolved_msg(ticket_id, ticket["subject"], ""),
             )
         except Exception:
             logger.warning(

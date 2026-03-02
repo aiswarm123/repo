@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import queries
+from bot.handlers.templates import support_reply_msg, ticket_resolved_msg
 from bot.keyboards.admin import (
     admin_menu_keyboard,
     stats_keyboard,
@@ -69,10 +70,10 @@ async def _send_tickets_page(
 
     keyboard = tickets_list_keyboard(tickets, status, page, total, PER_PAGE)
     if isinstance(target, Message):
-        await target.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await target.answer(text, reply_markup=keyboard)
     else:
         await target.message.edit_text(  # type: ignore[union-attr]
-            text, reply_markup=keyboard, parse_mode="HTML"
+            text, reply_markup=keyboard
         )
         await target.answer()
 
@@ -127,7 +128,6 @@ async def cb_view_ticket(callback: CallbackQuery, db_path: str) -> None:
     await callback.message.edit_text(  # type: ignore[union-attr]
         text,
         reply_markup=ticket_view_keyboard(ticket_id, ticket["status"], page),
-        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -171,8 +171,7 @@ async def process_admin_reply(
     try:
         await message.bot.send_message(  # type: ignore[union-attr]
             ticket["user_id"],
-            f"👨‍💼 <b>Support:</b> {message.text}",
-            parse_mode="HTML",
+            support_reply_msg(ticket_id, ticket["subject"], message.text),
         )
         await message.answer(f"Reply sent to user for ticket #{ticket_id}.")
     except Exception:
@@ -205,8 +204,7 @@ async def cb_resolve_ticket(callback: CallbackQuery, db_path: str) -> None:
         if ticket:
             await callback.bot.send_message(  # type: ignore[union-attr]
                 ticket["user_id"],
-                f"✅ Your conversation has been resolved. "
-                "Thank you for contacting support! Write any message to start a new one.",
+                ticket_resolved_msg(ticket_id, ticket["subject"], ""),
             )
     except Exception:
         logger.warning("Could not notify user about resolution of ticket #%d", ticket_id)
@@ -241,7 +239,7 @@ async def _build_stats_text(db_path: str) -> str:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message, db_path: str) -> None:
-    await message.answer(await _build_stats_text(db_path), parse_mode="HTML")
+    await message.answer(await _build_stats_text(db_path))
 
 
 @router.callback_query(F.data == "admin:stats")
@@ -249,7 +247,6 @@ async def cb_stats(callback: CallbackQuery, db_path: str) -> None:
     await callback.message.edit_text(  # type: ignore[union-attr]
         await _build_stats_text(db_path),
         reply_markup=stats_keyboard(),
-        parse_mode="HTML",
     )
     await callback.answer()
 
