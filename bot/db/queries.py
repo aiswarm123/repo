@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS ticket_replies (
     body       TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id  INTEGER PRIMARY KEY,
+    language TEXT NOT NULL DEFAULT 'en'
+);
 """
 
 
@@ -109,3 +114,24 @@ async def get_replies(db_path: str, ticket_id: int) -> list[dict]:
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+
+async def get_user_language(db_path: str, user_id: int) -> str:
+    """Return the stored language for a user, defaulting to 'en'."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT language FROM user_settings WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else "en"
+
+
+async def set_user_language(db_path: str, user_id: int, language: str) -> None:
+    """Upsert the language preference for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT INTO user_settings (user_id, language) VALUES (?, ?)"
+            " ON CONFLICT(user_id) DO UPDATE SET language = excluded.language",
+            (user_id, language),
+        )
+        await db.commit()

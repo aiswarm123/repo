@@ -1,6 +1,7 @@
-"""Handlers for regular users: /start, /ticket FSM flow."""
+"""Handlers for regular users: /start, /help, /ticket FSM flow, /language."""
 
 import logging
+from typing import Callable
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -8,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import queries
-from bot.keyboards.user import cancel_keyboard, ticket_submitted_keyboard
+from bot.keyboards.user import cancel_keyboard, language_keyboard, ticket_submitted_keyboard
 from bot.states.ticket import TicketForm
 
 logger = logging.getLogger(__name__)
@@ -16,52 +17,79 @@ router = Router()
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message) -> None:
-    await message.answer(
-        "Welcome to Support Bot!\n\n"
-        "Use /ticket to open a new support ticket.\n"
-        "Use /mystatus <ticket_id> to check a ticket's status."
-    )
+async def cmd_start(message: Message, t: Callable[[str], str], db_path: str) -> None:
+    user = message.from_user
+    # Auto-detect language on first /start from Telegram language_code
+    if user and db_path:
+        stored = await queries.get_user_language(db_path, user.id)
+        if stored == "en" and user.language_code in ("ru", "uk"):
+            await queries.set_user_language(db_path, user.id, user.language_code)
+            from bot.locales import make_t
+            t = make_t(user.language_code)
+
+    name = user.first_name if user else "there"
+    await message.answer(t("start").format(name=name))
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message, t: Callable[[str], str]) -> None:
+    await message.answer(t("help"))
+
+
+@router.message(Command("language"))
+async def cmd_language(message: Message, t: Callable[[str], str]) -> None:
+    await message.answer(t("language_choose"), reply_markup=language_keyboard())
+
+
+@router.callback_query(F.data.startswith("lang:"))
+async def language_callback(
+    callback: CallbackQuery,
+    t: Callable[[str], str],
+    db_path: str,
+) -> None:
+    lang = callback.data.split(":")[1]  # type: ignore[union-attr]
+    user = callback.from_user
+    if user and db_path:
+        await queries.set_user_language(db_path, user.id, lang)
+    from bot.locales import make_t
+    t = make_t(lang)
+    await callback.message.edit_text(t("language_set"))  # type: ignore[union-attr]
+    await callback.answer()
 
 
 @router.message(Command("ticket"))
-async def cmd_ticket(message: Message, state: FSMContext) -> None:
+async def cmd_ticket(message: Message, state: FSMContext, t: Callable[[str], str]) -> None:
     await state.set_state(TicketForm.waiting_for_subject)
-    await message.answer(
-        "Please enter a short subject for your ticket:",
-        reply_markup=cancel_keyboard(),
-    )
+    await message.answer(t("ticket_ask_subject"), reply_markup=cancel_keyboard())
 
 
 @router.callback_query(F.data == "cancel")
-async def cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+async def cancel_callback(callback: CallbackQuery, state: FSMContext, t: Callable[[str], str]) -> None:
     await state.clear()
-    await callback.message.edit_text("Ticket creation cancelled.")  # type: ignore[union-attr]
+    await callback.message.edit_text(t("cancelled"))  # type: ignore[union-attr]
     await callback.answer()
 
 
 @router.message(TicketForm.waiting_for_subject)
-async def process_subject(message: Message, state: FSMContext) -> None:
+async def process_subject(message: Message, state: FSMContext, t: Callable[[str], str]) -> None:
     if not message.text:
-        await message.answer("Please send a text message for the subject.")
+        await message.answer(t("ticket_subject_invalid"))
         return
     await state.update_data(subject=message.text)
     await state.set_state(TicketForm.waiting_for_body)
-    await message.answer(
-        "Now describe your issue in detail:",
-        reply_markup=cancel_keyboard(),
-    )
+    await message.answer(t("ticket_ask_body"), reply_markup=cancel_keyboard())
 
 
 @router.message(TicketForm.waiting_for_body)
 async def process_body(
     message: Message,
     state: FSMContext,
+    t: Callable[[str], str],
     db_path: str,
     support_chat_id: int,
 ) -> None:
     if not message.text:
-        await message.answer("Please send a text message for the description.")
+        await message.answer(t("ticket_body_invalid"))
         return
 
     data = await state.get_data()
@@ -80,7 +108,7 @@ async def process_body(
     await state.clear()
 
     await message.answer(
-        f"Ticket #{ticket_id} submitted! Our team will get back to you shortly.",
+        t("ticket_submitted").format(id=ticket_id),
         reply_markup=ticket_submitted_keyboard(ticket_id),
     )
 
@@ -100,7 +128,7 @@ async def process_body(
 
 
 @router.message(Command("mystatus"))
-async def cmd_mystatus(message: Message, db_path: str) -> None:
+async def cmd_mystatus(message: Message, t: Callable[[str], str], db_path: str) -> None:
     args = message.text.split() if message.text else []  # type: ignore[union-attr]
     if len(args) < 2 or not args[1].isdigit():
         await message.answer("Usage: /mystatus <ticket_id>")
