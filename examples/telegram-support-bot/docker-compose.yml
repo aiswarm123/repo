@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - support-db:/app/support.db
+    restart: unless-stopped
+
+volumes:
+  support-db:
