@@ -11,6 +11,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.config import load_config
 from bot.db.queries import init_db
 from bot.handlers import support, user
+from bot.middlewares.i18n import I18nMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +34,8 @@ async def main() -> None:
     # Inject dependencies into handlers via middleware data
     dp["db_path"] = config.database_path
     dp["support_chat_id"] = config.support_chat_id
+
+    dp.update.middleware(I18nMiddleware())
 
     dp.include_router(user.router)
     dp.include_router(support.router)
