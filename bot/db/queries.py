@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
     user_id  INTEGER PRIMARY KEY,
     language TEXT NOT NULL DEFAULT 'en'
 );
+
+CREATE TABLE IF NOT EXISTS banned_users (
+    user_id   INTEGER PRIMARY KEY,
+    banned_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -135,3 +140,84 @@ async def set_user_language(db_path: str, user_id: int, language: str) -> None:
             (user_id, language),
         )
         await db.commit()
+
+
+# ── Admin queries ─────────────────────────────────────────────────────────────
+
+
+async def get_all_tickets(
+    db_path: str,
+    status: str,
+    limit: int,
+    offset: int,
+) -> list[dict]:
+    """Return paginated tickets filtered by status."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM tickets WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (status, limit, offset),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_ticket_count_by_status(db_path: str) -> dict:
+    """Return a dict with counts: total, open, resolved."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT status, COUNT(*) FROM tickets GROUP BY status"
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    counts: dict[str, int] = {}
+    for status, count in rows:
+        counts[status] = count
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+async def get_unique_user_ids(db_path: str) -> list[int]:
+    """Return list of unique user_ids from the tickets table."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT DISTINCT user_id FROM tickets") as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+
+async def get_last_24h_count(db_path: str) -> int:
+    """Return count of tickets created in the last 24 hours."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM tickets WHERE created_at >= datetime('now', '-1 day')"
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+
+async def ban_user(db_path: str, user_id: int) -> None:
+    """Add a user to the banned_users table (idempotent)."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)", (user_id,)
+        )
+        await db.commit()
+
+
+async def unban_user(db_path: str, user_id: int) -> bool:
+    """Remove a user from the banned_users table. Returns True if they were banned."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "DELETE FROM banned_users WHERE user_id = ?", (user_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def is_banned(db_path: str, user_id: int) -> bool:
+    """Return True if the user is in the banned_users table."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM banned_users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            return await cursor.fetchone() is not None
