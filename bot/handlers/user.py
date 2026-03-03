@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import queries
+from bot.handlers.templates import new_ticket_msg
 from bot.keyboards.support import ticket_notification_keyboard
 from bot.keyboards.user import (
     MENU_HELP,
@@ -69,11 +70,11 @@ async def help_category_callback(
 ) -> None:
     category = (callback.data or "").split(":")[1]
     if category == "tickets":
-        await callback.message.edit_text(t("help_tickets_info"), parse_mode="HTML")  # type: ignore[union-attr]
+        await callback.message.edit_text(t("help_tickets_info"))  # type: ignore[union-attr]
     elif category == "account":
-        await callback.message.edit_text(t("help_account_info"), parse_mode="HTML")  # type: ignore[union-attr]
+        await callback.message.edit_text(t("help_account_info"))  # type: ignore[union-attr]
     elif category == "billing":
-        await callback.message.edit_text(t("help_billing_info"), parse_mode="HTML")  # type: ignore[union-attr]
+        await callback.message.edit_text(t("help_billing_info"))  # type: ignore[union-attr]
     elif category == "contact":
         await state.set_state(TicketForm.waiting_for_subject)
         await callback.message.answer(t("ticket_ask_subject"), reply_markup=cancel_keyboard())  # type: ignore[union-attr]
@@ -165,33 +166,36 @@ async def cancel_callback(
     await callback.answer()
 
 
-@router.message(TicketForm.waiting_for_subject)
+@router.message(TicketForm.waiting_for_subject, F.text)
 async def process_subject(
     message: Message, state: FSMContext, t: Callable[[str], str]
 ) -> None:
-    if not message.text:
-        await message.answer(t("ticket_subject_invalid"))
-        return
     await state.update_data(subject=message.text)
     await state.set_state(TicketForm.waiting_for_body)
     await message.answer(t("ticket_ask_body"), reply_markup=cancel_keyboard())
 
 
-@router.message(TicketForm.waiting_for_body)
+@router.message(TicketForm.waiting_for_subject)
+async def process_subject_invalid(message: Message, t: Callable[[str], str]) -> None:
+    await message.answer(t("ticket_subject_invalid"))
+
+
+@router.message(TicketForm.waiting_for_body, F.text)
 async def process_body(
     message: Message, state: FSMContext, t: Callable[[str], str]
 ) -> None:
-    if not message.text:
-        await message.answer(t("ticket_body_invalid"))
-        return
     await state.update_data(body=message.text)
     await state.set_state(TicketForm.confirming)
     data = await state.get_data()
     await message.answer(
         t("ticket_confirm").format(subject=data["subject"], body=data["body"]),
         reply_markup=confirm_ticket_keyboard(),
-        parse_mode="HTML",
     )
+
+
+@router.message(TicketForm.waiting_for_body)
+async def process_body_invalid(message: Message, t: Callable[[str], str]) -> None:
+    await message.answer(t("ticket_body_invalid"))
 
 
 @router.callback_query(F.data == "ticket:submit")
@@ -228,11 +232,7 @@ async def ticket_submit_callback(
     )
     await callback.bot.send_message(  # type: ignore[union-attr]
         support_chat_id,
-        f"🎫 <b>New ticket #{ticket_id}</b>\n"
-        f"From: {username_display}\n"
-        f"Subject: {subject}\n\n"
-        f"{body}",
-        parse_mode="HTML",
+        new_ticket_msg(ticket_id, username_display, subject, body),
         reply_markup=ticket_notification_keyboard(ticket_id),
     )
     logger.info("Ticket #%d created by user %d", ticket_id, user.id if user else 0)  # type: ignore[union-attr]
@@ -306,7 +306,6 @@ async def ticket_view_callback(
     await callback.message.edit_text(  # type: ignore[union-attr]
         text,
         reply_markup=ticket_detail_keyboard(ticket_id, is_open),
-        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -334,7 +333,6 @@ async def ticket_refresh_callback(
     await callback.message.edit_text(  # type: ignore[union-attr]
         text,
         reply_markup=ticket_detail_keyboard(ticket_id, is_open),
-        parse_mode="HTML",
     )
     await callback.answer("Refreshed!")
 
@@ -385,7 +383,6 @@ async def relay_user_message(
                 support_chat_id,
                 f"<b>{user.first_name}:</b> {message.text}",
                 reply_to_message_id=ticket["thread_msg_id"],
-                parse_mode="HTML",
             )
         except Exception:
             logger.warning("Could not relay message to support chat for ticket #%d", ticket["id"])
@@ -402,7 +399,6 @@ async def relay_user_message(
                 f"💬 <b>New conversation</b> — {user.full_name} ({username_display}, "
                 f"<code>{user.id}</code>)\n\n{message.text}\n\n"
                 f"<i>Reply to this thread to respond. Use /resolve to close.</i>",
-                parse_mode="HTML",
             )
             await queries.set_thread_msg_id(db_path, ticket_id, fwd.message_id)
         except Exception:

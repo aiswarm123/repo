@@ -1,6 +1,6 @@
 """Async database query layer using aiosqlite."""
 
-import aiosqlite
+from bot.db.connection import execute_write, get_db
 
 
 CREATE_TABLES_SQL = """
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS banned_users (
 
 async def init_db(db_path: str) -> None:
     """Create tables if they don't already exist."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         await db.executescript(CREATE_TABLES_SQL)
         await db.commit()
 
@@ -53,29 +53,25 @@ async def create_ticket(
     body: str | None = None,
 ) -> int:
     """Insert a new ticket and return its id."""
-    async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute(
-            "INSERT INTO tickets (user_id, username, subject, body) VALUES (?, ?, ?, ?)",
-            (user_id, username, subject, body),
-        )
-        await db.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+    return await execute_write(  # type: ignore[return-value]
+        db_path,
+        "INSERT INTO tickets (user_id, username, subject, body) VALUES (?, ?, ?, ?)",
+        (user_id, username, subject, body),
+    )
 
 
 async def set_thread_msg_id(db_path: str, ticket_id: int, thread_msg_id: int) -> None:
     """Store the support-chat message ID that anchors the ticket thread."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "UPDATE tickets SET forward_msg = ?, thread_msg_id = ? WHERE id = ?",
-            (thread_msg_id, thread_msg_id, ticket_id),
-        )
-        await db.commit()
+    await execute_write(
+        db_path,
+        "UPDATE tickets SET forward_msg = ?, thread_msg_id = ? WHERE id = ?",
+        (thread_msg_id, thread_msg_id, ticket_id),
+    )
 
 
 async def get_ticket(db_path: str, ticket_id: int) -> dict | None:
     """Fetch a single ticket by id. Returns None if not found."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM tickets WHERE id = ?", (ticket_id,)
         ) as cursor:
@@ -85,8 +81,7 @@ async def get_ticket(db_path: str, ticket_id: int) -> dict | None:
 
 async def get_open_ticket_by_user(db_path: str, user_id: int) -> dict | None:
     """Return the user's currently open ticket, or None."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM tickets WHERE user_id = ? AND status = 'open' "
             "ORDER BY created_at DESC LIMIT 1",
@@ -98,8 +93,7 @@ async def get_open_ticket_by_user(db_path: str, user_id: int) -> dict | None:
 
 async def get_ticket_by_forward_msg(db_path: str, forward_msg: int) -> dict | None:
     """Find an open ticket by the support-chat anchor message ID."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM tickets WHERE forward_msg = ?",
             (forward_msg,),
@@ -110,8 +104,7 @@ async def get_ticket_by_forward_msg(db_path: str, forward_msg: int) -> dict | No
 
 async def get_user_tickets(db_path: str, user_id: int) -> list[dict]:
     """Return all tickets for a specific user ordered by creation time desc."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
@@ -122,8 +115,7 @@ async def get_user_tickets(db_path: str, user_id: int) -> list[dict]:
 
 async def get_open_tickets(db_path: str) -> list[dict]:
     """Return all tickets with status='open'."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM tickets WHERE status = 'open' ORDER BY created_at DESC"
         ) as cursor:
@@ -133,7 +125,7 @@ async def get_open_tickets(db_path: str) -> list[dict]:
 
 async def resolve_ticket(db_path: str, ticket_id: int) -> bool:
     """Mark a ticket as resolved. Returns True if a row was updated."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         cursor = await db.execute(
             "UPDATE tickets SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP "
             "WHERE id = ? AND status = 'open'",
@@ -151,12 +143,11 @@ async def append_message(
     text: str,
 ) -> None:
     """Append a message to the conversation history."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "INSERT INTO messages (ticket_id, direction, sender_id, text) VALUES (?, ?, ?, ?)",
-            (ticket_id, direction, sender_id, text),
-        )
-        await db.commit()
+    await execute_write(
+        db_path,
+        "INSERT INTO messages (ticket_id, direction, sender_id, text) VALUES (?, ?, ?, ?)",
+        (ticket_id, direction, sender_id, text),
+    )
 
 
 async def add_reply(db_path: str, ticket_id: int, agent_id: int, body: str) -> None:
@@ -166,8 +157,7 @@ async def add_reply(db_path: str, ticket_id: int, agent_id: int, body: str) -> N
 
 async def get_messages(db_path: str, ticket_id: int) -> list[dict]:
     """Return all messages for a ticket ordered by creation time."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM messages WHERE ticket_id = ? ORDER BY created_at ASC",
             (ticket_id,),
@@ -178,7 +168,7 @@ async def get_messages(db_path: str, ticket_id: int) -> list[dict]:
 
 async def get_user_language(db_path: str, user_id: int) -> str:
     """Return the stored language for a user, defaulting to 'en'."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT language FROM user_settings WHERE user_id = ?", (user_id,)
         ) as cursor:
@@ -188,13 +178,12 @@ async def get_user_language(db_path: str, user_id: int) -> str:
 
 async def set_user_language(db_path: str, user_id: int, language: str) -> None:
     """Upsert the language preference for a user."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "INSERT INTO user_settings (user_id, language) VALUES (?, ?)"
-            " ON CONFLICT(user_id) DO UPDATE SET language = excluded.language",
-            (user_id, language),
-        )
-        await db.commit()
+    await execute_write(
+        db_path,
+        "INSERT INTO user_settings (user_id, language) VALUES (?, ?)"
+        " ON CONFLICT(user_id) DO UPDATE SET language = excluded.language",
+        (user_id, language),
+    )
 
 
 # ── Admin queries ─────────────────────────────────────────────────────────────
@@ -207,8 +196,7 @@ async def get_all_tickets(
     offset: int,
 ) -> list[dict]:
     """Return paginated tickets filtered by status."""
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT * FROM tickets WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (status, limit, offset),
@@ -219,7 +207,7 @@ async def get_all_tickets(
 
 async def get_ticket_count_by_status(db_path: str) -> dict:
     """Return a dict with counts: total, open, resolved."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT status, COUNT(*) FROM tickets GROUP BY status"
         ) as cursor:
@@ -234,7 +222,7 @@ async def get_ticket_count_by_status(db_path: str) -> dict:
 
 async def get_unique_user_ids(db_path: str) -> list[int]:
     """Return list of unique user_ids from the tickets table."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         async with db.execute("SELECT DISTINCT user_id FROM tickets") as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
@@ -242,7 +230,7 @@ async def get_unique_user_ids(db_path: str) -> list[int]:
 
 async def get_last_24h_count(db_path: str) -> int:
     """Return count of tickets created in the last 24 hours."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT COUNT(*) FROM tickets WHERE created_at >= datetime('now', '-1 day')"
         ) as cursor:
@@ -252,16 +240,16 @@ async def get_last_24h_count(db_path: str) -> int:
 
 async def ban_user(db_path: str, user_id: int) -> None:
     """Add a user to the banned_users table (idempotent)."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)", (user_id,)
-        )
-        await db.commit()
+    await execute_write(
+        db_path,
+        "INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)",
+        (user_id,),
+    )
 
 
 async def unban_user(db_path: str, user_id: int) -> bool:
     """Remove a user from the banned_users table. Returns True if they were banned."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         cursor = await db.execute(
             "DELETE FROM banned_users WHERE user_id = ?", (user_id,)
         )
@@ -271,7 +259,7 @@ async def unban_user(db_path: str, user_id: int) -> bool:
 
 async def is_banned(db_path: str, user_id: int) -> bool:
     """Return True if the user is in the banned_users table."""
-    async with aiosqlite.connect(db_path) as db:
+    async with get_db(db_path) as db:
         async with db.execute(
             "SELECT 1 FROM banned_users WHERE user_id = ?", (user_id,)
         ) as cursor:
